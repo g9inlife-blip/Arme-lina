@@ -1,5 +1,11 @@
 # TASK-005 — Request → Local Response → Player State / Static Data 구조 증명
 
+> 상태: **PLANNED** (2026-09-25 확인) — TASK-006 이후 단계.
+> 일부 "오프라인" 어휘가 남아 있으나 방향(Local Server)과 충돌하지 않는 범위에서 유효.
+> TASK 상태 추적: `research/targets/INDEX.md`
+
+---
+
 ## 상태
 PLANNED / TASK-003 이후 단계
 

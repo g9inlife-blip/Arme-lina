@@ -2,6 +2,32 @@
 
 Status: IN PROGRESS
 
+## 0. 2026-09-25 보충 (리나)
+
+이 보고서 §7 "Unknown / Needs More Evidence" 중 암호화/전송 관련 항목이
+2026-09-21/22 분석에서 해소됐다. 상세는 `research/CRYPTO_TRANSPORT.md` 참조.
+
+| §7 항목 | 현재 상태 |
+|---|---|
+| `TCPTube` handshake packet structure | **CONFIRMED** — TCP/Server 양방향 layout 확정, PCAP 대조 완료 |
+| `Commands.CmdEncrypt` 의미와 `Crypto.EncryptUnSafe/DecryptUnSafe` 관계 | **CONFIRMED** — `0x80` = Encrypt, `Tools.DecryptUnSafe()` = Rijndael CBC/PKCS7/128-bit, `IV = payload[0:16]` |
+| `CmdCompress` | **PARTIAL** — `0x40` = Compress 확인, 압축 알고리즘은 미확정 |
+| Response deserialize 경로 | **CONFIRMED** — 복호화 후 protobuf `OpInfo` |
+| `V4_POST_Login` 전체 파라미터 | UNKNOWN — TASK-007 §1 |
+| `Sign(signKey, dict)` 알고리즘/키 출처 | UNKNOWN — TASK-007 §2 |
+| `ProtocolGame_SendRequest.Login()` OpInfo 필드 | UNKNOWN — TASK-007 §3 |
+| `DataCenter.ProccessRequestRes` 필수 필드 | UNKNOWN — TASK-007 §4 |
+| HTTP `API_Login` 실제 URL path | UNKNOWN — TASK-007 §1 |
+| Response JSON vs 기타 직렬화 | UNKNOWN — TASK-007 §1 |
+
+따라서 §8 "GPT 판단 대기"의 판단은 다음과 같이 갱신한다:
+
+- 게임 서버(`:8000`) 종단은 **원본 wire format 그대로 구현 가능** — Client crypto/transport 패치 불필요 (COMMON_RULES Level 1 가설 지지)
+- 다음 조사는 **HTTP API 트랙**(`API_Login`/`API_Anon`/`API_Allin1`)과 **OpInfo/State 트랙**에 집중
+- TASK-007이 위 UNKNOWN 항목을 담당한다 (2026-09-25 개정판)
+
+---
+
 ## 1. Goal
 
 Login flow를 패치로 강제 성공시키기 전에, 원본 Client가 사용하는 로그인 Request/Response 경계와 Main bootstrap 진입 조건을 증거로 정리한다.

@@ -1,5 +1,10 @@
 # TASK-002 — GameUpdateService 온라인 게이트 구조화
 
+> 상태: **PLANNED** (2026-09-25 확인) — Phase 0 (Update Gate). 아키텍처상 여전히 유효.
+> TASK 상태 추적: `research/targets/INDEX.md`
+
+---
+
 ## 목적
 업데이트 실패를 일으키는 온라인 의존 지점을 패치하기 전에 각각의 역할과 성공/실패 경로를 증명한다.
 

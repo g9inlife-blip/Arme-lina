@@ -16,6 +16,9 @@ KBC 문서별 참고 가이드: `research/REFERENCE_KBC_DOCUMENTS.md`
 
 Protocol/PCAP/Crypto 작업 절차: `research/PROTOCOL_CAPTURE_AND_CRYPTO_WORKFLOW.md`
 
+확정된 전송/암호화 증거: `research/CRYPTO_TRANSPORT.md`
+(DH64 세션키, TCP/KCP 핸드셰이크, Rijndael 설정 — 2026-09-21/22 분석 반영)
+
 ## 2. 참고용 King Bug Castle 자료
 
 `참고용-another_app/` 폴더에는 다른 게임인 **King Bug Castle(KBC) Private Server / Reverse Engineering 프로젝트**가 참고용으로 포함되어 있다.
@@ -216,14 +219,15 @@ Response
 1. `START_HERE.md`
 2. `ARCHITECTURE_DIRECTION.md`
 3. `CURRENT_STATE.md`
-4. `REFERENCE_ANOTHER_APP.md`
-5. `REFERENCE_KBC_DOCUMENTS.md`
-6. `PROTOCOL_CAPTURE_AND_CRYPTO_WORKFLOW.md`
-7. `CODEX_PROTOCOL.md`
-8. `RUNTIME_PROTOCOL.md`
-9. `OFFLINE_TEST_MATRIX.md`
-10. `DUNGEON_REWARD_AND_GACHA_AUTHORITY.md`
-11. `reports/`
-12. `runtime/`
+4. `CRYPTO_TRANSPORT.md` — 전송/암호화 확정 증거 (2026-09-25 추가)
+5. `REFERENCE_ANOTHER_APP.md`
+6. `REFERENCE_KBC_DOCUMENTS.md`
+7. `PROTOCOL_CAPTURE_AND_CRYPTO_WORKFLOW.md`
+8. `CODEX_PROTOCOL.md`
+9. `RUNTIME_PROTOCOL.md`
+10. `OFFLINE_TEST_MATRIX.md`
+11. `DUNGEON_REWARD_AND_GACHA_AUTHORITY.md`
+12. `reports/`
+13. `runtime/`
 
 오래된 문서의 완전 Client Local화 문구는 현재 방향과 충돌할 경우 참고용으로만 취급한다.
