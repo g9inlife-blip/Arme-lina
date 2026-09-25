@@ -131,6 +131,14 @@ Interceptor.attach(base.add(0xCD95C0 /* 예시 RVA */), {
 | `ptrace` 기반 디버거 검출 | frida-server가 아닌 Gadget + spawn 방식 고려 |
 | 무결성/서명 검사 | 후킹은 앱 바이너리를 수정하지 않으므로 일반적으로 무관 |
 
+> **현버전 확인됨 (2026-09-25):** CodeStage **ACTk** 사용
+> (`InjectionDetector`, `ObscuredCheatingDetector`, `SpeedHackDetector`,
+> `TimeCheatingDetector`, `WallHackDetector`) + 네이티브 `TracerPid` 검사.
+> Frida/Xposed/Magisk 전용 탐지 문자열은 없음.
+> Frida는 네이티브 레벨이라 ACTk의 managed 탐지를 직접 건드리지 않지만,
+> 실행 중 행위 탐지에 걸릴 수 있으니 단계적으로 접근한다.
+> 상세: `research/reports/NEWVERSION-001-metadata.md` §5.
+
 - 원칙: **탐지가 확인되기 전에는 과도한 우회를 먼저 하지 않는다.**
   일단 기본 frida-server로 붙여보고, 튕기거나 탐지 로그가 나오면 그때 대응한다.
 - LDPlayer는 에뮬레이터라 실기기보다 탐지 내성이 낮은 편인 경우가 많다.

@@ -17,7 +17,12 @@
 
 ## 조사 대상 (우선순위 순)
 
-### 0. 전제 검증 — HTTP 로그인 트랙이 현재 클라이언트에 살아있는가 (먼저 수행)
+### 0. 전제 검증 — HTTP 로그인 트랙이 현재 클라이언트에 살아있는가 ✅ **확정 (2026-09-25)**
+- 현버전 `global-metadata.dat`에서 `V4_POST_Login`(5), `ac.aliother.com`(1),
+  `API_Login`(3), `V3_POST_AllInOne`(4) 확인 → **트랙 살아있음**
+- 신규 엔드포인트: `https://ac.aliother.com/v3/ain1`, `https://gm.aliother.com/s1/stat/log`
+- 상세: `research/reports/NEWVERSION-001-metadata.md`
+- 이에 따라 §1·§2 진행 확정. 아래는 §0의 원래 게이트 기록 (보존):
 - `V4_POST_Login` / `ac.aliother.com` / `API_Login` 문자열 참조가 **현재 버전 클라이언트**에 여전히 존재하는지 확인
 - 존재하지 않거나 dead code면 §1·§2(HTTP 로그인 + Sign)는 **스킵**하고 §3·§4(게임 서버 로그인)에 집중
 - 배경: 2026-09-21 PCAP에는 `:8000` 게임 서버 트래픽만 관측됐고, HTTP 로그인 트랙의 현재 유효성은 미검증 상태다.

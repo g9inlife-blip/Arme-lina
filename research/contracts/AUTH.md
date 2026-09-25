@@ -7,9 +7,10 @@
 
 ```text
 Action: 로그인 토큰 발급
-Endpoint/Command: API_Login (HTTP, 실제 URL path 미확정)
-Transport: HTTPS (ac.aliother.com:443 로 추정) — PROBABLE
-Request Type: HttpRequest (V4_POST_Login)
+Endpoint/Command: API_Login (HTTP)
+Transport: HTTPS — CONFIRMED (현버전 메타데이터)
+Base URL: https://ac.aliother.com/v3/ain1 (CONFIRMED, 2026-09-25)
+Request Type: HttpRequest (V4_POST_Login — 현버전 존재 확인됨)
 Request Fields:
   uid: PROBABLE
   pwd: PROBABLE
