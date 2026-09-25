@@ -17,7 +17,16 @@
 
 ## 조사 대상 (우선순위 순)
 
+### 0. 전제 검증 — HTTP 로그인 트랙이 현재 클라이언트에 살아있는가 (먼저 수행)
+- `V4_POST_Login` / `ac.aliother.com` / `API_Login` 문자열 참조가 **현재 버전 클라이언트**에 여전히 존재하는지 확인
+- 존재하지 않거나 dead code면 §1·§2(HTTP 로그인 + Sign)는 **스킵**하고 §3·§4(게임 서버 로그인)에 집중
+- 배경: 2026-09-21 PCAP에는 `:8000` 게임 서버 트래픽만 관측됐고, HTTP 로그인 트랙의 현재 유효성은 미검증 상태다.
+  레거시 트랙을 역분석하는 헛수고를 피하기 위한 게이트다.
+- "게임이 TLS pinning을 port 80/HTTP로 우회 송출한다"는 주장의 근거도 함께 확인
+  (실제 캡처 확인인지 추정인지, 어느 endpoint가 :80인지)
+
 ### 1. HTTP 로그인 요청 — `V4_POST_Login` (RVA 0xCD5B48)
+> §0에서 트랙 유효성이 확인된 경우에만 수행
 - 파라미터 딕셔너리의 전체 키 목록 (`uid`, `pwd`, `type` + `GetDefaultParams()` 추가분)
 - 최종 URL path (`API_Login`이 path의 어디에 들어가는지)
 - HTTP method, Content-Type, body 인코딩 (JSON / form / 기타)

@@ -184,8 +184,27 @@ Request / Response 처리
 즉 **원본 wire format을 그대로 구현하는 것이 가능**하며, Client의 crypto/transport를 뜯어고칠 필요가 없다
 (COMMON_RULES §2 Level 1 — Original Wire/TLS Compatibility 가설을 지지하는 증거).
 
+### 7.1 로컬 서버 구현 관점에서의 중요 구분
+
+1. **"세션 키 런타임 캡처" 병목은 도청에만 해당한다.**
+   §6의 병목(원본 서버의 DH private key를 알 수 없어 PCAP 복호화 불가)은
+   **원본 서버 트래픽을 엿듣는 경우**의 문제다.
+   로컬 서버는 handshake 응답 시 **서버측 DH keypair를 직접 생성**하므로
+   session key를 온전히 계산할 수 있다. 로컬 서버 구현에는 병목이 없다.
+
+2. **param4 (344 bytes)는 수신 후 무시해도 될 가능성이 높다.**
+   param4는 client→server 방향 페이로드이며, 서버 응답에 param4 기반 값이
+   들어간다는 증거는 없다. 로컬 서버는 파싱 위치만 맞추고 내용은 버리는
+   전략으로 시작해도 된다 (클라이언트가 param4 echo를 요구한다는 증거가
+   나오면 그때 대응 — TASK-007 §7).
+
+3. **구현 순서는 TCP부터.**
+   PCAP에 TCP와 UDP/KCP가 모두 보이지만, 로그인은 TCP 경로로 먼저 구현하고
+   KCP는 필요해지면 추가한다. KCP fragment 재조립 미구현도 TCP 우선 전략이면
+   당장 문제가 되지 않는다.
+
 단, HTTP API (`ac.aliother.com:443`, `API_Login` 등)의 서명/직렬화는 별개 트랙으로 아직 미확정이다
-→ TASK-007 참조.
+→ TASK-007 참조. 단 해당 트랙이 현재 클라이언트에 여전히 살아있는지는 먼저 검증 필요 (TASK-007 §0).
 
 ## 8. 원본 문서
 
