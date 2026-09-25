@@ -1,6 +1,7 @@
 # COMMON_RULES — 프로젝트 공통 작업 규칙
 
-> 아르메블랑쉐의 Reverse Engineering / Protocol / Local Server / APK 작업에 공통 적용한다.
+> 저스티스스쿨(`com.Alioth.JusticeSchool.kr`)의 Reverse Engineering / Protocol / Local Server / APK 작업에 공통 적용한다.
+> (구버전: 아르메블랑쉐 / `com.thumbage.heroes.google` — 기존 증거는 구버전 기준)
 
 ## 1. 최상위 방향
 

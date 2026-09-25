@@ -1,5 +1,8 @@
 # 아르메블랑쉐 데이터 구조 확장 분석 — 출석/일일보상/업적/이벤트/한정가챠
 
+> 참고: 이 문서가 분석한 데이터는 구버전(아르메블랑쉐 / `com.thumbage.heroes.google`) 기준이다.
+> 현버전은 저스티스스쿨 (`com.Alioth.JusticeSchool.kr`) — Record 구조 재검증 필요.
+
 > 분석 기준: `참고용-unity-behavior-data/MonoBehaviour`
 >
 > 목적: 서버 구현이 아니라 Unity 데이터 테이블 간 관계를 복원하고, 게임 내 보상/업적/출석/이벤트/가챠 시스템의 실제 구성을 파악한다.

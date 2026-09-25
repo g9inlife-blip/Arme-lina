@@ -1,7 +1,8 @@
 # Hooking 분석 개념 — 대규모 모바일 게임(IL2CPP) 적용 계획
 
 > 작성: 2026-09-25 (리나)
-> 대상 게임: `com.thumbage.heroes.google` (Unity / IL2CPP, `libil2cpp.so` 기반)
+> 대상 게임: `com.Alioth.JusticeSchool.kr` (저스티스스쿨, Unity / IL2CPP, `libil2cpp.so` 기반)
+> (구버전: `com.thumbage.heroes.google` / 아르메블랑쉐 — 기존 RVA 증거는 구버전 기준, 현버전 APK로 재검증 필요)
 
 ## 0. 한 줄 요약
 
@@ -31,7 +32,7 @@ LDPlayer (루팅 상태) ← 이미 사용 중인 환경
   └─ 호스트 PC에서 frida-tools / objection 등으로 스크립트 주입
 ```
 
-- 대상 프로세스: 게임 앱 프로세스 (`com.thumbage.heroes.google`)
+- 대상 프로세스: 게임 앱 프로세스 (`com.Alioth.JusticeSchool.kr`)
 - 대상 모듈: `libil2cpp.so` (네트워크·프로토콜 로직의 대부분이 여기 있음)
 - 네이티브 네트워크 스택도 동일 프로세스 안에 있으므로, TLS pinning 이전 단계(평문)에서 가로채기 가능
 

@@ -2,7 +2,7 @@
 
 ## 1. 목적
 
-이 문서는 `참고용-another_app/`에 포함된 **King Bug Castle(KBC) Private Server / Reverse Engineering 프로젝트의 문서군**을 현재 프로젝트(아르메블랑쉐)에서 참고하기 위한 문서 인덱스다.
+이 문서는 `참고용-another_app/`에 포함된 **King Bug Castle(KBC) Private Server / Reverse Engineering 프로젝트의 문서군**을 현재 프로젝트(저스티스스쿨)에서 참고하기 위한 문서 인덱스다.
 
 KBC는 현재 게임과 다른 게임이므로, 여기서는 **문서가 설명하는 방법·구조·workflow를 참고**한다. 현재 게임의 API, protocol, auth, crypto, state, reward, asset 데이터는 반드시 현재 게임 분석 결과로 확정한다.
 

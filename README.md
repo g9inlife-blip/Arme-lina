@@ -1,6 +1,7 @@
 # Heroes Offline Research
 
-이 저장소는 `com.thumbage.heroes.google` Unity/IL2CPP 게임의 역분석 작업용 연구 저장소다.
+이 저장소는 `com.Alioth.JusticeSchool.kr` (저스티스스쿨) Unity/IL2CPP 게임의 역분석 작업용 연구 저장소다.
+(구버전: `com.thumbage.heroes.google` / 아르메블랑쉐 — 기존 증거는 구버전 기준, `research/CURRENT_STATE.md` §0 참조)
 
 ## 현재 방향 (2026-09-25 기준)
 

@@ -1,7 +1,21 @@
 # Current State
 
+## 0. Game Identity / Version History
+
+> 2026-09-25 업데이트: 같은 게임의 버전 전환 확인됨.
+
+| | 구버전 | 현버전 (분석 대상) |
+|---|---|---|
+| 타이틀 | 아르메블랑쉐 | **저스티스스쿨** |
+| Package | `com.thumbage.heroes.google` | **`com.Alioth.JusticeSchool.kr`** |
+
+**주의:** 이 저장소의 기존 증거(RVA, 암호화 분석, PCAP, Record 매핑 등)는
+**구버전(아르메블랑쉐) 기준**으로 수집됐다. 현버전 APK에 대해 재검증이 필요하다.
+특히 TASK-007 §0(HTTP 로그인 트랙 유효성)은 현버전 기준으로 다시 확인해야 한다.
+
 ## 1. Project
-- Package: `com.thumbage.heroes.google`
+- Package: `com.Alioth.JusticeSchool.kr` (구버전: `com.thumbage.heroes.google`)
+- Title: 저스티스스쿨 (구버전 타이틀: 아르메블랑쉐)
 - Engine: Unity / IL2CPP
 - Architecture investigated: ARM64
 - Primary development direction: **Local Private Server / API Emulation**
