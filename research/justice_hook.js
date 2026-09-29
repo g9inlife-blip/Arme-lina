@@ -1,10 +1,7 @@
 /**
- * JusticeSchool - Login Hook Script v5
+ * JusticeSchool - Login Hook Script v6
  *
- * Changes from v4:
- *  - Proper Dictionary<string,string> enumeration (key-value pairs)
- *  - Sign return value: dumps raw type info + hex if not a valid string
- *  - Uses overload-aware method resolution
+ * NO frida-il2cpp-bridge dependency. Uses direct il2cpp C API via NativeFunction.
  *
  * Usage:
  *   frida -H 127.0.0.1:27042 -n Gadget -l research/frida/justice_hook.js
@@ -12,18 +9,54 @@
 
 'use strict';
 
-// ---------- helpers ----------
+// ---------- Il2Cpp C API bindings ----------
 
-function waitForIl2cpp() {
-    return new Promise((resolve) => {
-        const timer = setInterval(() => {
-            try {
-                const h = Module.getExportByName('libil2cpp.so', 'il2cpp_thread_attach');
-                if (h) { clearInterval(timer); resolve(); }
-            } catch (e) {}
-        }, 500);
-    });
+let il2cpp = null;
+
+function initIl2cppApi() {
+    const getExp = (name) => {
+        try { return Module.getExportByName('libil2cpp.so', name); }
+        catch (e) { return null; }
+    };
+    const domain_get = getExp('il2cpp_domain_get');
+    if (!domain_get) return false;
+    il2cpp = {
+        domain_get: new NativeFunction(domain_get, 'pointer', []),
+        thread_attach: new NativeFunction(getExp('il2cpp_thread_attach'), 'pointer', ['pointer']),
+        domain_get_assemblies: new NativeFunction(getExp('il2cpp_domain_get_assemblies'), 'pointer', ['pointer', 'pointer']),
+        assembly_get_image: new NativeFunction(getExp('il2cpp_assembly_get_image'), 'pointer', ['pointer']),
+        image_get_name: new NativeFunction(getExp('il2cpp_image_get_name'), 'pointer', ['pointer']),
+        image_get_class_count: new NativeFunction(getExp('il2cpp_image_get_class_count'), 'uint', ['pointer']),
+        image_get_class: new NativeFunction(getExp('il2cpp_image_get_class'), 'pointer', ['pointer', 'uint']),
+        class_get_name: new NativeFunction(getExp('il2cpp_class_get_name'), 'pointer', ['pointer']),
+        class_get_methods: new NativeFunction(getExp('il2cpp_class_get_methods'), 'pointer', ['pointer', 'pointer']),
+        method_get_name: new NativeFunction(getExp('il2cpp_method_get_name'), 'pointer', ['pointer']),
+        method_get_param_count: new NativeFunction(getExp('il2cpp_method_get_param_count'), 'uint8', ['pointer']),
+        method_get_param: new NativeFunction(getExp('il2cpp_method_get_param'), 'pointer', ['pointer', 'uint']),
+        method_get_return_type: new NativeFunction(getExp('il2cpp_method_get_return_type'), 'pointer', ['pointer']),
+        type_get_name: new NativeFunction(getExp('il2cpp_type_get_name'), 'pointer', ['pointer']),
+        free: new NativeFunction(getExp('il2cpp_free') || Module.getExportByName(null, 'free'), 'void', ['pointer']),
+    };
+    return true;
 }
+
+function cstr(ptr) {
+    if (ptr.isNull()) return '';
+    try { return ptr.readCString(); } catch (e) { return ''; }
+}
+
+function typeName(tptr) {
+    if (tptr.isNull()) return '?';
+    try {
+        const p = il2cpp.type_get_name(tptr);
+        const s = cstr(p);
+        // il2cpp_type_get_name allocates; free it (best effort)
+        try { il2cpp.free(p); } catch (e) {}
+        return s;
+    } catch (e) { return '?'; }
+}
+
+// ---------- string / dict readers ----------
 
 function readIl2cppString(ptr) {
     if (ptr.isNull()) return '(null)';
@@ -42,26 +75,21 @@ function trunc(s, maxLen = 500) {
     return s.length > maxLen ? s.substring(0, maxLen) + `...[${s.length} chars]` : s;
 }
 
-// Enumerate Dictionary<string,string> via raw memory.
-// Layout (from v4 debug): _entries at offset 24, _count nearby.
-// Entry struct: hashCode(4) + next(4) + key(8) + value(8) = 24 bytes.
-// Il2Cpp array: [klass(8)][monitor(8)][bounds(8)][max_length(8)][data...] (SZARRAY: data at +32)
+// Dictionary<string,string> raw walk.
+// _entries at +24 (from v4 debug), Entry = hash(4)+next(4)+key(8)+value(8) = 24B.
+// Il2Cpp SZARRAY data starts at +32.
 function dumpDictionary(dictPtr) {
     if (dictPtr.isNull()) return '(null dict)';
     try {
         const out = {};
-        // _entries array pointer at offset 24 (from v4 debug: entriesOffset=24)
         const entriesArr = dictPtr.add(24).readPointer();
         if (entriesArr.isNull()) return '(entries null)';
-        // _count: try offset 32 (right after _entries pointer)
         const count = dictPtr.add(32).readU32();
         if (count > 1000) return `(suspicious count=${count})`;
-        // Array data starts at +32 for SZARRAY
         const dataStart = entriesArr.add(32);
         for (let i = 0; i < count; i++) {
             const e = dataStart.add(i * 24);
-            const hash = e.readS32();
-            if (hash < 0) continue; // free slot
+            if (e.readS32() < 0) continue;
             const k = readIl2cppString(e.add(8).readPointer());
             const v = readIl2cppString(e.add(16).readPointer());
             out[k] = v;
@@ -72,127 +100,143 @@ function dumpDictionary(dictPtr) {
     }
 }
 
-function findMethod(className, methodName, paramCount) {
-    try {
-        const asm = Il2Cpp.domain.assembly('Assembly-CSharp');
-        const klass = asm.image.class(className);
-        const methods = klass.methods.filter(m =>
-            m.name === methodName && m.parameterCount === paramCount);
-        if (methods.length === 0) {
-            console.log(`[!] Not found: ${className}.${methodName} (${paramCount} params)`);
-            return null;
+// ---------- method lookup ----------
+
+function findMethods(className, methodName, paramCount) {
+    const results = [];
+    const domain = il2cpp.domain_get();
+    il2cpp.thread_attach(domain);
+    const sizePtr = Memory.alloc(8);
+    const assemblies = il2cpp.domain_get_assemblies(domain, sizePtr);
+    const nAsm = sizePtr.readU64();
+    for (let i = 0; i < nAsm; i++) {
+        const asm = assemblies.add(i * 8).readPointer();
+        const img = il2cpp.assembly_get_image(asm);
+        const imgName = cstr(il2cpp.image_get_name(img));
+        if (imgName !== 'Assembly-CSharp') continue;
+        const nCls = il2cpp.image_get_class_count(img);
+        for (let c = 0; c < nCls; c++) {
+            const klass = il2cpp.image_get_class(img, c);
+            if (cstr(il2cpp.class_get_name(klass)) !== className) continue;
+            const iter = Memory.alloc(8); iter.writeU64(0);
+            while (true) {
+                const method = il2cpp.class_get_methods(klass, iter);
+                if (method.isNull()) break;
+                const mName = cstr(il2cpp.method_get_name(method));
+                if (mName !== methodName) continue;
+                const pc = il2cpp.method_get_param_count(method);
+                if (pc !== paramCount) continue;
+                // MethodInfo.methodPointer is at offset 0
+                const fnPtr = method.readPointer();
+                const sig = [];
+                for (let p = 0; p < pc; p++)
+                    sig.push(typeName(il2cpp.method_get_param(method, p)));
+                const ret = typeName(il2cpp.method_get_return_type(method));
+                results.push({ addr: fnPtr, sig: sig.join(', '), ret });
+            }
         }
-        for (const m of methods) {
-            const sig = m.parameters.map(p => p.type.name).join(', ');
-            console.log(`[?] ${className}.${methodName} overload: (${sig}) @ ${m.virtualAddress}`);
-        }
-        const chosen = methods[0];
-        console.log(`[+] Using ${className}.${methodName} @ ${chosen.virtualAddress}`);
-        // Print return type name
-        try { console.log(`    return type: ${chosen.returnType.name}`); } catch (e) {}
-        return chosen;
-    } catch (e) {
-        console.log(`[!] Error finding ${methodName}: ${e.message}`);
-        return null;
     }
+    return results;
 }
 
 // ---------- main ----------
 
-async function main() {
-    console.log('[*] justice_hook v5 starting...');
-    await waitForIl2cpp();
-    const base = Process.enumerateModules()
-        .filter(m => m.name === 'libil2cpp.so')[0];
-    if (base) console.log(`[*] libil2cpp.so base @ ${base.base}`);
+function waitForIl2cpp() {
+    return new Promise((resolve) => {
+        const t = setInterval(() => {
+            try {
+                Module.getExportByName('libil2cpp.so', 'il2cpp_thread_attach');
+                clearInterval(t); resolve();
+            } catch (e) {}
+        }, 500);
+    });
+}
 
-    // Wait for Assembly-CSharp
-    console.log('[*] Waiting for Assembly-CSharp...');
-    let asm = null;
+async function main() {
+    console.log('[*] justice_hook v6 starting...');
+    await waitForIl2cpp();
+    const mod = Process.enumerateModules().filter(m => m.name === 'libil2cpp.so')[0];
+    if (mod) console.log(`[*] libil2cpp.so base @ ${mod.base}`);
+    if (!initIl2cppApi()) { console.log('[!] il2cpp exports not found'); return; }
+    console.log('[*] IL2CPP API bound. Waiting for Assembly-CSharp...');
+
+    // wait until Assembly-CSharp appears
+    let ready = false;
     for (let i = 0; i < 120; i++) {
         try {
-            asm = Il2Cpp.domain.assembly('Assembly-CSharp');
-            if (asm) break;
+            const domain = il2cpp.domain_get();
+            const sp = Memory.alloc(8);
+            const asms = il2cpp.domain_get_assemblies(domain, sp);
+            const n = sp.readU64();
+            for (let k = 0; k < n; k++) {
+                const img = il2cpp.assembly_get_image(asms.add(k * 8).readPointer());
+                if (cstr(il2cpp.image_get_name(img)) === 'Assembly-CSharp') { ready = true; break; }
+            }
+            if (ready) break;
         } catch (e) {}
         await new Promise(r => setTimeout(r, 1000));
     }
-    if (!asm) { console.log('[!] Assembly-CSharp never loaded'); return; }
+    if (!ready) { console.log('[!] Assembly-CSharp never loaded'); return; }
     console.log('[*] Assembly-CSharp found. Installing hooks...');
 
     const CN = 'ProtocolGame_HttpRequest';
     let n = 0;
-
-    // V4_POST_Login(string, string, string)
-    const v4 = findMethod(CN, 'V4_POST_Login', 3);
-    if (v4) {
-        Interceptor.attach(v4.virtualAddress, {
-            onEnter(args) {
-                console.log('\n========== V4_POST_Login ==========');
-                console.log(`  app_key: ${trunc(readIl2cppString(args[0]))}`);
-                console.log(`  content: ${trunc(readIl2cppString(args[1]))}`);
-                console.log(`  apiName: ${trunc(readIl2cppString(args[2]))}`);
-            },
-            onLeave() { console.log('====================================\n'); }
-        });
+    const hook = (mName, pc, onEnter, onLeave) => {
+        const ms = findMethods(CN, mName, pc);
+        if (!ms.length) { console.log(`[!] Not found: ${mName} (${pc})`); return; }
+        for (const m of ms)
+            console.log(`[?] ${CN}.${mName}(${m.sig}) -> ${m.ret} @ ${m.addr}`);
+        const m = ms[0];
+        console.log(`[+] Hooking ${mName} @ ${m.addr}`);
+        Interceptor.attach(m.addr, { onEnter, onLeave });
         n++;
-    }
+    };
 
-    // Sign(string, Dictionary<string,string>)
-    const sign = findMethod(CN, 'Sign', 2);
-    if (sign) {
-        Interceptor.attach(sign.virtualAddress, {
-            onEnter(args) {
-                console.log('\n---------- Sign called ----------');
-                this.c = readIl2cppString(args[0]);
-                this.d = dumpDictionary(args[1]);
-                console.log(`  content: ${trunc(this.c)}`);
-                console.log(`  dict: ${this.d}`);
-            },
-            onLeave(retval) {
-                let out;
-                try {
-                    const s = readIl2cppString(retval);
-                    out = s.startsWith('(invalid') ? `(RAW_PTR=${retval} hex=[${retval.readByteArray(32).join(' ')}])` : s;
-                } catch (e) { out = `(read failed: ${e.message})`; }
-                console.log(`  => SIGN OUTPUT: ${trunc(out, 300)}`);
-                console.log('----------------------------------');
-                console.log(`[SIGN_DATA] content=${JSON.stringify(trunc(this.c, 2000))} dict=${this.d} output=${JSON.stringify(trunc(out, 500))}\n`);
-            }
+    hook('V4_POST_Login', 3,
+        function (args) {
+            console.log('\n========== V4_POST_Login ==========');
+            console.log(`  app_key: ${trunc(readIl2cppString(args[0]))}`);
+            console.log(`  content: ${trunc(readIl2cppString(args[1]))}`);
+            console.log(`  apiName: ${trunc(readIl2cppString(args[2]))}`);
+        },
+        function () { console.log('====================================\n'); });
+
+    hook('Sign', 2,
+        function (args) {
+            console.log('\n---------- Sign called ----------');
+            this.c = readIl2cppString(args[0]);
+            this.d = dumpDictionary(args[1]);
+            console.log(`  content: ${trunc(this.c)}`);
+            console.log(`  dict: ${this.d}`);
+        },
+        function (retval) {
+            let out;
+            try {
+                const s = readIl2cppString(retval);
+                out = s.startsWith('(invalid')
+                    ? `(RAW_PTR=${retval} qword0=${retval.readU64().toString(16)})`
+                    : s;
+            } catch (e) { out = `(read failed: ${e.message})`; }
+            console.log(`  => SIGN OUTPUT: ${trunc(out, 300)}`);
+            console.log('----------------------------------');
+            console.log(`[SIGN_DATA] content=${JSON.stringify(trunc(this.c, 2000))} dict=${this.d} output=${JSON.stringify(trunc(out, 500))}\n`);
         });
-        n++;
-    }
 
-    // GetDefaultParams()
-    const gdp = findMethod(CN, 'GetDefaultParams', 0);
-    if (gdp) {
-        Interceptor.attach(gdp.virtualAddress, {
-            onEnter() { console.log('\n---------- GetDefaultParams ----------'); },
-            onLeave(retval) {
-                console.log(`  [return] ${dumpDictionary(retval)}`);
-                console.log('----------------------------------\n');
-            }
+    hook('GetDefaultParams', 0,
+        function () { console.log('\n---------- GetDefaultParams ----------'); },
+        function (retval) {
+            console.log(`  [return] ${dumpDictionary(retval)}`);
+            console.log('----------------------------------\n');
         });
-        n++;
-    }
 
-    // V3_POST_AllInOne(string)
-    const aio = findMethod(CN, 'V3_POST_AllInOne', 1);
-    if (aio) {
-        Interceptor.attach(aio.virtualAddress, {
-            onEnter(args) {
-                console.log('\n========== V3_POST_AllInOne ==========');
-                console.log(`  app_key: ${trunc(readIl2cppString(args[0]))}`);
-                console.log('====================================\n');
-            }
-        });
-        n++;
-    }
+    hook('V3_POST_AllInOne', 1,
+        function (args) {
+            console.log('\n========== V3_POST_AllInOne ==========');
+            console.log(`  app_key: ${trunc(readIl2cppString(args[0]))}`);
+            console.log('====================================\n');
+        }, null);
 
-    console.log(`\n[*] ${n} hooks installed. Trigger login in game. Look for [SIGN_DATA].\n`);
+    console.log(`\n[*] ${n} hooks installed. Trigger login. Look for [SIGN_DATA].\n`);
 }
 
-if (typeof Il2Cpp === 'undefined') {
-    console.log('[!] Il2Cpp bridge not found.');
-} else {
-    main();
-}
+main();
