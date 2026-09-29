@@ -341,7 +341,12 @@ function findMethodImpl(className, methodName, paramCount) {
 // Safely describe a return value: klass name + raw bytes, no string assumption
 function describeRetval(rv) {
     try {
-        if (rv.isNull()) return '(null)';
+        if (rv === null || rv === undefined) return '(null/undefined)';
+        // Value-type return (int, bool, etc.) comes as a JS number, not a pointer
+        if (typeof rv === 'number') return `(number: ${rv} / 0x${rv.toString(16)})`;
+        if (typeof rv !== 'object' || typeof rv.isNull !== 'function')
+            return `(${typeof rv}: ${String(rv).substring(0, 100)})`;
+        if (rv.isNull()) return '(null pointer)';
         const klass = api.object_get_class(rv);
         if (klass.isNull()) return `(no klass @ ${rv})`;
         const kname = api.class_get_name(klass).readCString();
@@ -349,7 +354,6 @@ function describeRetval(rv) {
         try {
             for (let i = 0; i < 32; i++) hex += rv.add(i).readU8().toString(16).padStart(2, '0') + ' ';
         } catch (e) { hex = 'unreadable'; }
-        // If it's a string, also try reading it
         let asStr = '';
         if (kname === 'String') {
             asStr = ` str="${trunc(readIl2cppString(rv), 200)}"`;
