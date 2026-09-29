@@ -216,50 +216,33 @@ function readDictionary(dictPtr) {
         // Find _entries field
         const entriesField = api.class_get_field_from_name(klass, Memory.allocUtf8String('_entries'));
         if (entriesField.isNull()) {
-            return `(no _entries field, klass @ ${klass})`;
+            // List all fields for diagnosis
+            return `(no _entries field)`;
         }
         const entriesOffset = api.field_get_offset(entriesField);
         const entriesArr = dictPtr.add(entriesOffset).readPointer();
         if (entriesArr.isNull()) return '(null entries)';
-        // IL2CPP array: [klass(8)][monitor(8)][bounds(8)][max_length(4)][...data]
-        // Actually: SzArray: klass(8), monitor(8), max_length(4), then data
-        // For vector: length at offset 16 (4 bytes), data at offset 32? Let's check.
-        // Standard: Il2CppArray: klass(8) + monitor(8) + bounds(8*) + max_length(4) + vector[0]
-        // For SZARRAY (1D, 0-based): bounds is null, max_length at offset 24?
-        // Let's try: length at 16, data at 24 for SZARRAY
-        const length = entriesArr.add(16).readU32();
-        if (length > 100) return `(suspicious length ${length})`;
-        const result = {};
-        // Entry struct: hashCode(4) + next(4) + key(8) + value(8) = 24 bytes
-        const ENTRY_SIZE = 24;
-        const dataStart = 32; // typical for Il2CppArray with bounds
-        // Try both 24 and 32
-        for (const ds of [24, 32]) {
-            try {
-                const testLen = entriesArr.add(16).readU32();
-                // Quick sanity: try reading first entry's key
-                const firstKeyPtr = entriesArr.add(ds + 8).readPointer();
-                if (!firstKeyPtr.isNull()) {
-                    const keyStr = readIl2cppString(firstKeyPtr);
-                    if (keyStr && !keyStr.startsWith('(') && keyStr.length < 100) {
-                        // Looks valid, use this offset
-                        for (let i = 0; i < length; i++) {
-                            const entryPtr = entriesArr.add(ds + i * ENTRY_SIZE);
-                            const hashCode = entryPtr.readU32();
-                            if (hashCode === 0) continue; // empty slot (hashCode 0 means unused? actually -1)
-                            const keyPtr = entryPtr.add(8).readPointer();
-                            const valPtr = entryPtr.add(16).readPointer();
-                            if (keyPtr.isNull()) continue;
-                            const k = readIl2cppString(keyPtr);
-                            const v = valPtr.isNull() ? '(null)' : readIl2cppString(valPtr);
-                            result[k] = v;
-                        }
-                        return result;
-                    }
-                }
-            } catch (e) { continue; }
+        
+        // Dump array header for diagnosis
+        let headerHex = '';
+        for (let i = 0; i < 40; i++) {
+            headerHex += entriesArr.add(i).readU8().toString(16).padStart(2, '0') + ' ';
         }
-        return `(parse failed, length=${length})`;
+        
+        // Try to find length - IL2CPP array layout varies
+        // Try offset 16 (common for max_length in Il2CppArray)
+        const len16 = entriesArr.add(16).readU32();
+        const len24 = entriesArr.add(24).readU32();
+        
+        // Also get _count field from dictionary
+        const countField = api.class_get_field_from_name(klass, Memory.allocUtf8String('_count'));
+        let dictCount = -1;
+        if (!countField.isNull()) {
+            const countOffset = api.field_get_offset(countField);
+            dictCount = dictPtr.add(countOffset).readU32();
+        }
+        
+        return `(dict debug: entriesOffset=${entriesOffset}, dictCount=${dictCount}, len@16=${len16}, len@24=${len24}, header=[${headerHex}])`;
     } catch (e) {
         return `(dict error: ${e.message})`;
     }
