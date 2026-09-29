@@ -1,7 +1,7 @@
 /**
- * JusticeSchool (com.Alioth.JusticeSchool.cn) - Login Hook Script v4.1
+ * JusticeSchool (com.Alioth.JusticeSchool.cn) - Login Hook Script v4.2
  *
- * v4.1: Fixed Dictionary parsing (array max_length at offset 24, scan for valid entry)
+ * v4.2: Sign 반환 타입명 출력 + retval 안전 덤프 + ToBase64String 후킹 (t 추적)
  *
  * NO frida-il2cpp-bridge, NO frida-compile needed.
  * Resolves IL2CPP exports by parsing /proc/self/maps + ELF directly,
@@ -316,24 +316,75 @@ function findMethodImpl(className, methodName, paramCount) {
         }
         console.log(`[?] ${className}.${methodName} overload: (${typeNames.join(', ')}) @ ${method.readPointer()}`);
         if (pCount === paramCount) {
-            candidates.push({ method, typeNames, fnPtr: method.readPointer() });
+            let retName = '?';
+            try { retName = api.type_get_name(api.method_get_return_type(method)).readCString(); } catch (e) {}
+            candidates.push({ method, typeNames, fnPtr: method.readPointer(), retName });
         }
     }
     if (candidates.length === 0) {
         console.log(`[!] Method not found: ${className}.${methodName} (${paramCount} params)`);
-        return ptr(0);
+        return null;
     }
     // Prefer the overload where all params are System.String
     for (const c of candidates) {
         if (c.typeNames.every(t => t === 'System.String')) {
-            console.log(`[+] Found ${className}.${methodName}(${c.typeNames.join(', ')}) @ ${c.fnPtr}`);
-            return c.fnPtr;
+            console.log(`[+] Found ${className}.${methodName}(${c.typeNames.join(', ')}) -> ${c.retName} @ ${c.fnPtr}`);
+            return c;
         }
     }
     // Fallback: first candidate
     const c = candidates[0];
-    console.log(`[+] Found ${className}.${methodName}(${c.typeNames.join(', ')}) @ ${c.fnPtr} (first match)`);
-    return c.fnPtr;
+    console.log(`[+] Found ${className}.${methodName}(${c.typeNames.join(', ')}) -> ${c.retName} @ ${c.fnPtr} (first match)`);
+    return c;
+}
+
+// Safely describe a return value: klass name + raw bytes, no string assumption
+function describeRetval(rv) {
+    try {
+        if (rv.isNull()) return '(null)';
+        const klass = api.object_get_class(rv);
+        if (klass.isNull()) return `(no klass @ ${rv})`;
+        const kname = api.class_get_name(klass).readCString();
+        let hex = '';
+        try {
+            for (let i = 0; i < 32; i++) hex += rv.add(i).readU8().toString(16).padStart(2, '0') + ' ';
+        } catch (e) { hex = 'unreadable'; }
+        // If it's a string, also try reading it
+        let asStr = '';
+        if (kname === 'String') {
+            asStr = ` str="${trunc(readIl2cppString(rv), 200)}"`;
+        }
+        return `klass=${kname} @ ${rv} hex=[${hex}]${asStr}`;
+    } catch (e) {
+        return `(describe failed: ${e.message})`;
+    }
+}
+
+// Find a method in any loaded assembly (for System.Convert etc.)
+function findMethodAnywhere(className, methodName, paramCount) {
+    const domain = api.domain_get();
+    const countPtr = Memory.alloc(Process.pointerSize);
+    const assemblies = api.domain_get_assemblies(domain, countPtr);
+    const count = countPtr.readU32();
+    const emptyNs = Memory.allocUtf8String('');
+    for (let i = 0; i < count; i++) {
+        try {
+            const asm = assemblies.add(i * Process.pointerSize).readPointer();
+            const img = api.assembly_get_image(asm);
+            const klass = api.class_from_name(img, emptyNs, Memory.allocUtf8String(className));
+            if (klass.isNull()) continue;
+            const iter = Memory.alloc(Process.pointerSize);
+            iter.writePointer(ptr(0));
+            while (true) {
+                const method = api.class_get_methods(klass, iter);
+                if (method.isNull()) break;
+                if (api.method_get_name(method).readCString() !== methodName) continue;
+                if (api.method_get_param_count(method) !== paramCount) continue;
+                return method.readPointer();
+            }
+        } catch (e) { continue; }
+    }
+    return ptr(0);
 }
 
 function waitForIl2cpp() {
@@ -409,8 +460,8 @@ async function main() {
     // V4_POST_Login (static, 3 params)
     try {
         const v4Login = findMethodImpl(CLASS_NAME, 'V4_POST_Login', 3);
-        if (!v4Login.isNull()) {
-            Interceptor.attach(v4Login, {
+        if (v4Login) {
+            Interceptor.attach(v4Login.fnPtr, {
                 onEnter(args) {
                     console.log('\n========== V4_POST_Login called ==========');
                     const names = PARAMS['V4_POST_Login'];
@@ -432,8 +483,9 @@ async function main() {
     // Actual signature: Sign(System.String, Dictionary<String,String>)
     try {
         const sign = findMethodImpl(CLASS_NAME, 'Sign', 2);
-        if (!sign.isNull()) {
-            Interceptor.attach(sign, {
+        if (sign) {
+            console.log(`[*] Sign return type: ${sign.retName}`);
+            Interceptor.attach(sign.fnPtr, {
                 onEnter(args) {
                     console.log('\n---------- Sign called ----------');
                     const contentVal = readIl2cppString(args[0]);
@@ -446,11 +498,11 @@ async function main() {
                 },
                 onLeave(retval) {
                     const elapsed = Date.now() - this.startTime;
-                    const output = readIl2cppString(retval);
-                    console.log(`  => SIGN OUTPUT: ${trunc(output)}`);
+                    const desc = describeRetval(retval);
+                    console.log(`  => SIGN OUTPUT: ${desc}`);
                     console.log(`  (${elapsed}ms)`);
                     console.log('----------------------------------\n');
-                    console.log(`[SIGN_DATA] input_content=${JSON.stringify(trunc(this.inputs.content, 2000))} input_dict=${JSON.stringify(this.inputs.dict)} output=${JSON.stringify(output)}`);
+                    console.log(`[SIGN_DATA] input_content=${JSON.stringify(trunc(this.inputs.content, 2000))} input_dict=${JSON.stringify(this.inputs.dict)} output=${JSON.stringify(desc)}`);
                 }
             });
             hookCount++;
@@ -460,8 +512,8 @@ async function main() {
     // GetDefaultParams (static, 0 params) — returns Dictionary<string,string>
     try {
         const getDefault = findMethodImpl(CLASS_NAME, 'GetDefaultParams', 0);
-        if (!getDefault.isNull()) {
-            Interceptor.attach(getDefault, {
+        if (getDefault) {
+            Interceptor.attach(getDefault.fnPtr, {
                 onEnter(args) {
                     console.log('\n---------- GetDefaultParams called ----------');
                 },
@@ -478,8 +530,8 @@ async function main() {
     // V3_POST_AllInOne (static, 1 param)
     try {
         const allInOne = findMethodImpl(CLASS_NAME, 'V3_POST_AllInOne', 1);
-        if (!allInOne.isNull()) {
-            Interceptor.attach(allInOne, {
+        if (allInOne) {
+            Interceptor.attach(allInOne.fnPtr, {
                 onEnter(args) {
                     console.log('\n========== V3_POST_AllInOne called ==========');
                     console.log(`  app_key: ${trunc(readIl2cppString(args[0]))}`);
@@ -492,8 +544,42 @@ async function main() {
         }
     } catch (e) { console.log(`[!] V3_POST_AllInOne hook failed: ${e.message}`); }
 
+    // System.Convert.ToBase64String(byte[]) — t 생성 추적용
+    try {
+        const b64 = findMethodAnywhere('System.Convert', 'ToBase64String', 1);
+        if (!b64.isNull()) {
+            console.log(`[+] Hooking System.Convert.ToBase64String @ ${b64}`);
+            Interceptor.attach(b64, {
+                onEnter(args) {
+                    try {
+                        const arr = args[0];
+                        if (!arr.isNull()) {
+                            const len = arr.add(24).readU32();
+                            let hex = '';
+                            const n = Math.min(len, 16);
+                            for (let i = 0; i < n; i++)
+                                hex += arr.add(32 + i).readU8().toString(16).padStart(2, '0');
+                            console.log(`[B64] ToBase64String input: len=${len} head=[${hex}]`);
+                            this.inLen = len;
+                        }
+                    } catch (e) {}
+                },
+                onLeave(retval) {
+                    try {
+                        const s = readIl2cppString(retval);
+                        if (s && s.length > 100)
+                            console.log(`[B64] => output len=${s.length} head=${s.substring(0, 40)}...`);
+                    } catch (e) {}
+                }
+            });
+            hookCount++;
+        } else {
+            console.log('[!] System.Convert.ToBase64String not found');
+        }
+    } catch (e) { console.log(`[!] ToBase64String hook failed: ${e.message}`); }
+
     console.log(`\n[*] ${hookCount} hooks installed. Trigger a login in the game...`);
-    console.log('[*] Look for [SIGN_DATA] lines.\n');
+    console.log('[*] Look for [SIGN_DATA] and [B64] lines.\n');
 }
 
 main();
