@@ -1,192 +1,198 @@
 /**
- * JusticeSchool (com.Alioth.JusticeSchool.kr) - Login Hook Script v2
- * 
- * Hooks:
- *  - ProtocolGame_HttpRequest.V4_POST_Login(app_key, content, apiName)
- *  - ProtocolGame_HttpRequest.Sign(content, apiName)
- *  - ProtocolGame_HttpRequest.GetDefaultParams()
- *  - ProtocolGame_HttpRequest.V3_POST_AllInOne(app_key)
- * 
+ * JusticeSchool - Login Hook Script v5
+ *
+ * Changes from v4:
+ *  - Proper Dictionary<string,string> enumeration (key-value pairs)
+ *  - Sign return value: dumps raw type info + hex if not a valid string
+ *  - Uses overload-aware method resolution
+ *
  * Usage:
- *   frida -U -f com.Alioth.JusticeSchool.kr -l justice_hook.js --no-pause
- * 
- * Output: Captures Sign inputs/outputs for algorithm reverse-engineering,
- *         plus the full login request structure.
- * 
- * The game uses IL2CPP. We resolve methods by name at runtime via Il2Cpp API,
- * so no hardcoded addresses are needed.
+ *   frida -H 127.0.0.1:27042 -n Gadget -l research/frida/justice_hook.js
  */
 
 'use strict';
 
-// Parameter names (from static analysis, NEWVERSION-003)
-const PARAMS = {
-    'V4_POST_Login': ['app_key', 'content', 'apiName'],
-    'Sign': ['content', 'apiName'],
-    'GetDefaultParams': [],
-    'V3_POST_AllInOne': ['app_key'],
-};
+// ---------- helpers ----------
 
-// Wait for IL2CPP to be ready
 function waitForIl2cpp() {
     return new Promise((resolve) => {
         const timer = setInterval(() => {
             try {
-                const handle = Module.getExportByName('libil2cpp.so', 'il2cpp_thread_attach');
-                if (handle) {
-                    clearInterval(timer);
-                    resolve();
-                }
-            } catch (e) {
-                // libil2cpp not loaded yet
-            }
+                const h = Module.getExportByName('libil2cpp.so', 'il2cpp_thread_attach');
+                if (h) { clearInterval(timer); resolve(); }
+            } catch (e) {}
         }, 500);
     });
 }
 
-// Helper to read a C# string from Il2Cpp String* pointer
 function readIl2cppString(ptr) {
     if (ptr.isNull()) return '(null)';
     try {
-        // Il2CppString: [klass(8)][monitor(8)][length(4)][chars...]
         const length = ptr.add(16).readU32();
-        if (length > 10000) return `(string too long: ${length} chars)`;
+        if (length > 10000) return `(invalid string, length=${length})`;
         return ptr.add(20).readUtf16String(length);
     } catch (e) {
         return `<unreadable:${e.message}>`;
     }
 }
 
-// Helper to get method info
-function getMethod(className, methodName, paramCount) {
+function trunc(s, maxLen = 500) {
+    if (s === null || s === undefined) return '(null)';
+    s = String(s);
+    return s.length > maxLen ? s.substring(0, maxLen) + `...[${s.length} chars]` : s;
+}
+
+// Enumerate Dictionary<string,string> via raw memory.
+// Layout (from v4 debug): _entries at offset 24, _count nearby.
+// Entry struct: hashCode(4) + next(4) + key(8) + value(8) = 24 bytes.
+// Il2Cpp array: [klass(8)][monitor(8)][bounds(8)][max_length(8)][data...] (SZARRAY: data at +32)
+function dumpDictionary(dictPtr) {
+    if (dictPtr.isNull()) return '(null dict)';
     try {
-        const assembly = Il2Cpp.domain.assembly('Assembly-CSharp');
-        const klass = assembly.image.class(className);
-        const method = klass.method(methodName, paramCount);
-        if (!method) {
-            console.log(`[!] Method not found: ${className}.${methodName} (${paramCount} params)`);
+        const out = {};
+        // _entries array pointer at offset 24 (from v4 debug: entriesOffset=24)
+        const entriesArr = dictPtr.add(24).readPointer();
+        if (entriesArr.isNull()) return '(entries null)';
+        // _count: try offset 32 (right after _entries pointer)
+        const count = dictPtr.add(32).readU32();
+        if (count > 1000) return `(suspicious count=${count})`;
+        // Array data starts at +32 for SZARRAY
+        const dataStart = entriesArr.add(32);
+        for (let i = 0; i < count; i++) {
+            const e = dataStart.add(i * 24);
+            const hash = e.readS32();
+            if (hash < 0) continue; // free slot
+            const k = readIl2cppString(e.add(8).readPointer());
+            const v = readIl2cppString(e.add(16).readPointer());
+            out[k] = v;
+        }
+        return JSON.stringify(out, null, 1);
+    } catch (e) {
+        return `(dict dump failed: ${e.message})`;
+    }
+}
+
+function findMethod(className, methodName, paramCount) {
+    try {
+        const asm = Il2Cpp.domain.assembly('Assembly-CSharp');
+        const klass = asm.image.class(className);
+        const methods = klass.methods.filter(m =>
+            m.name === methodName && m.parameterCount === paramCount);
+        if (methods.length === 0) {
+            console.log(`[!] Not found: ${className}.${methodName} (${paramCount} params)`);
             return null;
         }
-        console.log(`[+] Found ${className}.${methodName} @ ${method.virtualAddress}`);
-        return method;
+        for (const m of methods) {
+            const sig = m.parameters.map(p => p.type.name).join(', ');
+            console.log(`[?] ${className}.${methodName} overload: (${sig}) @ ${m.virtualAddress}`);
+        }
+        const chosen = methods[0];
+        console.log(`[+] Using ${className}.${methodName} @ ${chosen.virtualAddress}`);
+        // Print return type name
+        try { console.log(`    return type: ${chosen.returnType.name}`); } catch (e) {}
+        return chosen;
     } catch (e) {
         console.log(`[!] Error finding ${methodName}: ${e.message}`);
         return null;
     }
 }
 
-// Truncate long strings for readability
-function trunc(s, maxLen = 500) {
-    if (s === null || s === undefined) return '(null)';
-    s = String(s);
-    if (s.length > maxLen) {
-        return s.substring(0, maxLen) + `...[truncated ${s.length} chars total]`;
-    }
-    return s;
-}
+// ---------- main ----------
 
 async function main() {
+    console.log('[*] justice_hook v5 starting...');
     await waitForIl2cpp();
-    console.log('[*] IL2CPP ready, installing hooks...\n');
+    const base = Process.enumerateModules()
+        .filter(m => m.name === 'libil2cpp.so')[0];
+    if (base) console.log(`[*] libil2cpp.so base @ ${base.base}`);
 
-    const className = 'ProtocolGame_HttpRequest';
-    let hookCount = 0;
+    // Wait for Assembly-CSharp
+    console.log('[*] Waiting for Assembly-CSharp...');
+    let asm = null;
+    for (let i = 0; i < 120; i++) {
+        try {
+            asm = Il2Cpp.domain.assembly('Assembly-CSharp');
+            if (asm) break;
+        } catch (e) {}
+        await new Promise(r => setTimeout(r, 1000));
+    }
+    if (!asm) { console.log('[!] Assembly-CSharp never loaded'); return; }
+    console.log('[*] Assembly-CSharp found. Installing hooks...');
 
-    // Hook V4_POST_Login (static, 3 params)
-    const v4Login = getMethod(className, 'V4_POST_Login', 3);
-    if (v4Login) {
-        Interceptor.attach(v4Login.virtualAddress, {
+    const CN = 'ProtocolGame_HttpRequest';
+    let n = 0;
+
+    // V4_POST_Login(string, string, string)
+    const v4 = findMethod(CN, 'V4_POST_Login', 3);
+    if (v4) {
+        Interceptor.attach(v4.virtualAddress, {
             onEnter(args) {
-                console.log('\n========== V4_POST_Login called ==========');
-                const names = PARAMS['V4_POST_Login'];
-                for (let i = 0; i < 3; i++) {
-                    const val = readIl2cppString(args[i]);
-                    console.log(`  ${names[i]}: ${trunc(val)}`);
-                }
-                this.callTime = Date.now();
+                console.log('\n========== V4_POST_Login ==========');
+                console.log(`  app_key: ${trunc(readIl2cppString(args[0]))}`);
+                console.log(`  content: ${trunc(readIl2cppString(args[1]))}`);
+                console.log(`  apiName: ${trunc(readIl2cppString(args[2]))}`);
             },
-            onLeave(retval) {
-                const elapsed = Date.now() - this.callTime;
-                console.log(`  [return after ${elapsed}ms]`);
-                console.log('========================================\n');
-            }
+            onLeave() { console.log('====================================\n'); }
         });
-        hookCount++;
+        n++;
     }
 
-    // Hook Sign (static, 2 params) - THE MOST IMPORTANT ONE
-    const sign = getMethod(className, 'Sign', 2);
+    // Sign(string, Dictionary<string,string>)
+    const sign = findMethod(CN, 'Sign', 2);
     if (sign) {
         Interceptor.attach(sign.virtualAddress, {
             onEnter(args) {
                 console.log('\n---------- Sign called ----------');
-                const names = PARAMS['Sign'];
-                this.inputs = {};
-                for (let i = 0; i < 2; i++) {
-                    const val = readIl2cppString(args[i]);
-                    this.inputs[names[i]] = val;
-                    console.log(`  ${names[i]}: ${trunc(val)}`);
-                }
-                this.startTime = Date.now();
+                this.c = readIl2cppString(args[0]);
+                this.d = dumpDictionary(args[1]);
+                console.log(`  content: ${trunc(this.c)}`);
+                console.log(`  dict: ${this.d}`);
             },
             onLeave(retval) {
-                const elapsed = Date.now() - this.startTime;
-                const output = readIl2cppString(retval);
-                console.log(`  => SIGN OUTPUT: ${trunc(output)}`);
-                console.log(`  (${elapsed}ms)`);
-                console.log('----------------------------------\n');
-                // Also log in a machine-readable format for analysis
-                console.log(`[SIGN_DATA] input_content=${JSON.stringify(trunc(this.inputs.content, 2000))} input_apiName=${JSON.stringify(this.inputs.apiName)} output=${JSON.stringify(output)}`);
+                let out;
+                try {
+                    const s = readIl2cppString(retval);
+                    out = s.startsWith('(invalid') ? `(RAW_PTR=${retval} hex=[${retval.readByteArray(32).join(' ')}])` : s;
+                } catch (e) { out = `(read failed: ${e.message})`; }
+                console.log(`  => SIGN OUTPUT: ${trunc(out, 300)}`);
+                console.log('----------------------------------');
+                console.log(`[SIGN_DATA] content=${JSON.stringify(trunc(this.c, 2000))} dict=${this.d} output=${JSON.stringify(trunc(out, 500))}\n`);
             }
         });
-        hookCount++;
+        n++;
     }
 
-    // Hook GetDefaultParams (static, 0 params)
-    const getDefault = getMethod(className, 'GetDefaultParams', 0);
-    if (getDefault) {
-        Interceptor.attach(getDefault.virtualAddress, {
-            onEnter(args) {
-                console.log('\n---------- GetDefaultParams called ----------');
-            },
+    // GetDefaultParams()
+    const gdp = findMethod(CN, 'GetDefaultParams', 0);
+    if (gdp) {
+        Interceptor.attach(gdp.virtualAddress, {
+            onEnter() { console.log('\n---------- GetDefaultParams ----------'); },
             onLeave(retval) {
-                // Return is a Dictionary - try to read it
-                // For now, just note it was called; dictionary reading is complex
-                console.log(`  [return] Dictionary object @ ${retval}`);
-                console.log('  (Use debugger to inspect dictionary contents)');
+                console.log(`  [return] ${dumpDictionary(retval)}`);
                 console.log('----------------------------------\n');
             }
         });
-        hookCount++;
+        n++;
     }
 
-    // Hook V3_POST_AllInOne (static, 1 param)
-    const allInOne = getMethod(className, 'V3_POST_AllInOne', 1);
-    if (allInOne) {
-        Interceptor.attach(allInOne.virtualAddress, {
+    // V3_POST_AllInOne(string)
+    const aio = findMethod(CN, 'V3_POST_AllInOne', 1);
+    if (aio) {
+        Interceptor.attach(aio.virtualAddress, {
             onEnter(args) {
-                console.log('\n========== V3_POST_AllInOne called ==========');
+                console.log('\n========== V3_POST_AllInOne ==========');
                 console.log(`  app_key: ${trunc(readIl2cppString(args[0]))}`);
-            },
-            onLeave(retval) {
-                console.log('============================================\n');
+                console.log('====================================\n');
             }
         });
-        hookCount++;
+        n++;
     }
 
-    console.log(`\n[*] ${hookCount} hooks installed successfully.`);
-    console.log('[*] Now trigger a login in the game...');
-    console.log('[*] Look for [SIGN_DATA] lines - those are the key to reverse-engineering Sign.\n');
+    console.log(`\n[*] ${n} hooks installed. Trigger login in game. Look for [SIGN_DATA].\n`);
 }
 
-// Frida-il2cpp-bridge provides global Il2Cpp
 if (typeof Il2Cpp === 'undefined') {
     console.log('[!] Il2Cpp bridge not found.');
-    console.log('    Install: npm install frida-il2cpp-bridge');
-    console.log('    Then add at the top of this script:');
-    console.log('        const { Il2Cpp } = require("frida-il2cpp-bridge");');
-    console.log('        Il2Cpp.perform(() => { main(); });');
 } else {
     main();
 }
