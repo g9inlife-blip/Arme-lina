@@ -200,11 +200,70 @@ function initApi() {
         method_get_name: new NativeFunction(exp('il2cpp_method_get_name'), 'pointer', ['pointer']),
         method_get_param_count: new NativeFunction(exp('il2cpp_method_get_param_count'), 'uint32', ['pointer']),
         method_get_param: new NativeFunction(exp('il2cpp_method_get_param'), 'pointer', ['pointer', 'uint32']),
+        method_get_return_type: new NativeFunction(exp('il2cpp_method_get_return_type'), 'pointer', ['pointer']),
         type_get_name: new NativeFunction(exp('il2cpp_type_get_name'), 'pointer', ['pointer']),
+        class_get_field_from_name: new NativeFunction(exp('il2cpp_class_get_field_from_name'), 'pointer', ['pointer', 'pointer']),
+        field_get_offset: new NativeFunction(exp('il2cpp_field_get_offset'), 'uint32', ['pointer']),
+        object_get_class: new NativeFunction(exp('il2cpp_object_get_class'), 'pointer', ['pointer']),
     };
 }
 
-// methodPointer is the first field of MethodInfo (offset 0) on Unity 2019-2022 IL2CPP.
+// Parse Dictionary<string,string> by reading its _entries array
+function readDictionary(dictPtr) {
+    try {
+        if (dictPtr.isNull()) return '(null dictionary)';
+        const klass = api.object_get_class(dictPtr);
+        // Find _entries field
+        const entriesField = api.class_get_field_from_name(klass, Memory.allocUtf8String('_entries'));
+        if (entriesField.isNull()) {
+            return `(no _entries field, klass @ ${klass})`;
+        }
+        const entriesOffset = api.field_get_offset(entriesField);
+        const entriesArr = dictPtr.add(entriesOffset).readPointer();
+        if (entriesArr.isNull()) return '(null entries)';
+        // IL2CPP array: [klass(8)][monitor(8)][bounds(8)][max_length(4)][...data]
+        // Actually: SzArray: klass(8), monitor(8), max_length(4), then data
+        // For vector: length at offset 16 (4 bytes), data at offset 32? Let's check.
+        // Standard: Il2CppArray: klass(8) + monitor(8) + bounds(8*) + max_length(4) + vector[0]
+        // For SZARRAY (1D, 0-based): bounds is null, max_length at offset 24?
+        // Let's try: length at 16, data at 24 for SZARRAY
+        const length = entriesArr.add(16).readU32();
+        if (length > 100) return `(suspicious length ${length})`;
+        const result = {};
+        // Entry struct: hashCode(4) + next(4) + key(8) + value(8) = 24 bytes
+        const ENTRY_SIZE = 24;
+        const dataStart = 32; // typical for Il2CppArray with bounds
+        // Try both 24 and 32
+        for (const ds of [24, 32]) {
+            try {
+                const testLen = entriesArr.add(16).readU32();
+                // Quick sanity: try reading first entry's key
+                const firstKeyPtr = entriesArr.add(ds + 8).readPointer();
+                if (!firstKeyPtr.isNull()) {
+                    const keyStr = readIl2cppString(firstKeyPtr);
+                    if (keyStr && !keyStr.startsWith('(') && keyStr.length < 100) {
+                        // Looks valid, use this offset
+                        for (let i = 0; i < length; i++) {
+                            const entryPtr = entriesArr.add(ds + i * ENTRY_SIZE);
+                            const hashCode = entryPtr.readU32();
+                            if (hashCode === 0) continue; // empty slot (hashCode 0 means unused? actually -1)
+                            const keyPtr = entryPtr.add(8).readPointer();
+                            const valPtr = entryPtr.add(16).readPointer();
+                            if (keyPtr.isNull()) continue;
+                            const k = readIl2cppString(keyPtr);
+                            const v = valPtr.isNull() ? '(null)' : readIl2cppString(valPtr);
+                            result[k] = v;
+                        }
+                        return result;
+                    }
+                }
+            } catch (e) { continue; }
+        }
+        return `(parse failed, length=${length})`;
+    } catch (e) {
+        return `(dict error: ${e.message})`;
+    }
+}
 function findMethodImpl(className, methodName, paramCount) {
     const domain = api.domain_get();
     const countPtr = Memory.alloc(Process.pointerSize);
@@ -365,19 +424,19 @@ async function main() {
     } catch (e) { console.log(`[!] V4_POST_Login hook failed: ${e.message}`); }
 
     // Sign (static, 2 params) — THE MOST IMPORTANT ONE
+    // Actual signature: Sign(System.String, Dictionary<String,String>)
     try {
         const sign = findMethodImpl(CLASS_NAME, 'Sign', 2);
         if (!sign.isNull()) {
             Interceptor.attach(sign, {
                 onEnter(args) {
                     console.log('\n---------- Sign called ----------');
-                    const names = PARAMS['Sign'];
-                    this.inputs = {};
-                    for (let i = 0; i < 2; i++) {
-                        const val = readIl2cppString(args[i]);
-                        this.inputs[names[i]] = val;
-                        console.log(`  ${names[i]}: ${trunc(val)}`);
-                    }
+                    const contentVal = readIl2cppString(args[0]);
+                    this.inputs = { content: contentVal };
+                    console.log(`  content: ${trunc(contentVal)}`);
+                    const dictVal = readDictionary(args[1]);
+                    this.inputs.dict = dictVal;
+                    console.log(`  dict: ${JSON.stringify(dictVal)}`);
                     this.startTime = Date.now();
                 },
                 onLeave(retval) {
@@ -386,14 +445,14 @@ async function main() {
                     console.log(`  => SIGN OUTPUT: ${trunc(output)}`);
                     console.log(`  (${elapsed}ms)`);
                     console.log('----------------------------------\n');
-                    console.log(`[SIGN_DATA] input_content=${JSON.stringify(trunc(this.inputs.content, 2000))} input_apiName=${JSON.stringify(this.inputs.apiName)} output=${JSON.stringify(output)}`);
+                    console.log(`[SIGN_DATA] input_content=${JSON.stringify(trunc(this.inputs.content, 2000))} input_dict=${JSON.stringify(this.inputs.dict)} output=${JSON.stringify(output)}`);
                 }
             });
             hookCount++;
         }
     } catch (e) { console.log(`[!] Sign hook failed: ${e.message}`); }
 
-    // GetDefaultParams (static, 0 params)
+    // GetDefaultParams (static, 0 params) — returns Dictionary<string,string>
     try {
         const getDefault = findMethodImpl(CLASS_NAME, 'GetDefaultParams', 0);
         if (!getDefault.isNull()) {
@@ -402,7 +461,8 @@ async function main() {
                     console.log('\n---------- GetDefaultParams called ----------');
                 },
                 onLeave(retval) {
-                    console.log(`  [return] Dictionary object @ ${retval}`);
+                    const dict = readDictionary(retval);
+                    console.log(`  [return] ${JSON.stringify(dict)}`);
                     console.log('----------------------------------\n');
                 }
             });
