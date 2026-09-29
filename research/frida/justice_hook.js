@@ -1,5 +1,7 @@
 /**
- * JusticeSchool (com.Alioth.JusticeSchool.cn) - Login Hook Script v4
+ * JusticeSchool (com.Alioth.JusticeSchool.cn) - Login Hook Script v4.1
+ *
+ * v4.1: Fixed Dictionary parsing (array max_length at offset 24, scan for valid entry)
  *
  * NO frida-il2cpp-bridge, NO frida-compile needed.
  * Resolves IL2CPP exports by parsing /proc/self/maps + ELF directly,
@@ -209,57 +211,60 @@ function initApi() {
 }
 
 // Parse Dictionary<string,string> by reading its _entries array
+// v4.1 fix: array max_length is at offset 24 (not 16). Scan for valid entry.
 function readDictionary(dictPtr) {
     try {
         if (dictPtr.isNull()) return '(null dictionary)';
         const klass = api.object_get_class(dictPtr);
-        // Find _entries field
         const entriesField = api.class_get_field_from_name(klass, Memory.allocUtf8String('_entries'));
-        if (entriesField.isNull()) {
-            return `(no _entries field, klass @ ${klass})`;
-        }
+        if (entriesField.isNull()) return `(no _entries field)`;
         const entriesOffset = api.field_get_offset(entriesField);
         const entriesArr = dictPtr.add(entriesOffset).readPointer();
         if (entriesArr.isNull()) return '(null entries)';
-        // IL2CPP array: [klass(8)][monitor(8)][bounds(8)][max_length(4)][...data]
-        // Actually: SzArray: klass(8), monitor(8), max_length(4), then data
-        // For vector: length at offset 16 (4 bytes), data at offset 32? Let's check.
-        // Standard: Il2CppArray: klass(8) + monitor(8) + bounds(8*) + max_length(4) + vector[0]
-        // For SZARRAY (1D, 0-based): bounds is null, max_length at offset 24?
-        // Let's try: length at 16, data at 24 for SZARRAY
-        const length = entriesArr.add(16).readU32();
-        if (length > 100) return `(suspicious length ${length})`;
+        // Il2CppArray layout: klass(8) + monitor(8) + bounds(8) + max_length(8) + data
+        // bounds=NULL at +16, max_length at +24 (confirmed from v4 debug: len@24=7)
+        const maxLen = entriesArr.add(24).readU32();
+        if (maxLen > 1000) return `(suspicious maxLen ${maxLen})`;
+        // Dictionary._count (actual used entries) - try offset right after _entries ptr
+        let dictCount = maxLen;
+        try {
+            const countField = api.class_get_field_from_name(klass, Memory.allocUtf8String('_count'));
+            if (!countField.isNull()) {
+                dictCount = dictPtr.add(api.field_get_offset(countField)).readU32();
+            }
+        } catch (e) {}
         const result = {};
-        // Entry struct: hashCode(4) + next(4) + key(8) + value(8) = 24 bytes
-        const ENTRY_SIZE = 24;
-        const dataStart = 32; // typical for Il2CppArray with bounds
-        // Try both 24 and 32
-        for (const ds of [24, 32]) {
+        const ENTRY_SIZE = 24; // hashCode(4) + next(4) + key(8) + value(8)
+        const dataStart = 32;  // after klass(8)+monitor(8)+bounds(8)+max_length(8)
+        // Find first occupied entry to validate (don't assume index 0 is used)
+        let validIdx = -1;
+        for (let i = 0; i < Math.min(maxLen, 20); i++) {
             try {
-                const testLen = entriesArr.add(16).readU32();
-                // Quick sanity: try reading first entry's key
-                const firstKeyPtr = entriesArr.add(ds + 8).readPointer();
-                if (!firstKeyPtr.isNull()) {
-                    const keyStr = readIl2cppString(firstKeyPtr);
-                    if (keyStr && !keyStr.startsWith('(') && keyStr.length < 100) {
-                        // Looks valid, use this offset
-                        for (let i = 0; i < length; i++) {
-                            const entryPtr = entriesArr.add(ds + i * ENTRY_SIZE);
-                            const hashCode = entryPtr.readU32();
-                            if (hashCode === 0) continue; // empty slot (hashCode 0 means unused? actually -1)
-                            const keyPtr = entryPtr.add(8).readPointer();
-                            const valPtr = entryPtr.add(16).readPointer();
-                            if (keyPtr.isNull()) continue;
-                            const k = readIl2cppString(keyPtr);
-                            const v = valPtr.isNull() ? '(null)' : readIl2cppString(valPtr);
-                            result[k] = v;
-                        }
-                        return result;
-                    }
+                const e = entriesArr.add(dataStart + i * ENTRY_SIZE);
+                const keyPtr = e.add(8).readPointer();
+                if (keyPtr.isNull()) continue;
+                const ks = readIl2cppString(keyPtr);
+                if (ks && !ks.startsWith('(') && ks.length > 0 && ks.length < 200) {
+                    validIdx = i;
+                    break;
                 }
             } catch (e) { continue; }
         }
-        return `(parse failed, length=${length})`;
+        if (validIdx < 0) return `(no valid entries found, maxLen=${maxLen})`;
+        // Enumerate all slots, skip empty (null key)
+        for (let i = 0; i < maxLen; i++) {
+            try {
+                const e = entriesArr.add(dataStart + i * ENTRY_SIZE);
+                const keyPtr = e.add(8).readPointer();
+                if (keyPtr.isNull()) continue;
+                const k = readIl2cppString(keyPtr);
+                if (!k || k.startsWith('(')) continue;
+                const valPtr = e.add(16).readPointer();
+                const v = valPtr.isNull() ? '(null)' : readIl2cppString(valPtr);
+                result[k] = v;
+            } catch (e) { continue; }
+        }
+        return result;
     } catch (e) {
         return `(dict error: ${e.message})`;
     }
