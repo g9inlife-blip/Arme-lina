@@ -203,7 +203,7 @@ function findMethodImpl(className, methodName, paramCount) {
         const asm = assemblies.add(i * Process.pointerSize).readPointer();
         const img = api.assembly_get_image(asm);
         const name = api.image_get_name(img).readCString();
-        if (name === 'Assembly-CSharp') { image = img; break; }
+        if (name === 'Assembly-CSharp' || name === 'Assembly-CSharp.dll') { image = img; break; }
     }
     if (image.isNull()) {
         console.log('[!] Assembly-CSharp not found');
@@ -271,7 +271,7 @@ function waitForAssembly() {
                     const img = api.assembly_get_image(asm);
                     const name = api.image_get_name(img).readCString();
                     names.push(name);
-                    if (name === 'Assembly-CSharp') {
+                    if (name === 'Assembly-CSharp' || name === 'Assembly-CSharp.dll') {
                         found = true;
                     }
                 }
