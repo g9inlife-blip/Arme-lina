@@ -254,12 +254,41 @@ function waitForIl2cpp() {
     });
 }
 
+function waitForAssembly() {
+    return new Promise((resolve) => {
+        console.log('[*] Waiting for Assembly-CSharp (enter the game world on the phone)...');
+        const timer = setInterval(() => {
+            try {
+                const domain = api.domain_get();
+                const countPtr = Memory.alloc(Process.pointerSize);
+                const assemblies = api.domain_get_assemblies(domain, countPtr);
+                const count = countPtr.readU32();
+                for (let i = 0; i < count; i++) {
+                    const asm = assemblies.add(i * Process.pointerSize).readPointer();
+                    const img = api.assembly_get_image(asm);
+                    const name = api.image_get_name(img).readCString();
+                    if (name === 'Assembly-CSharp') {
+                        clearInterval(timer);
+                        console.log(`[*] Assembly-CSharp found (${count} assemblies loaded).`);
+                        resolve();
+                        return;
+                    }
+                }
+            } catch (e) {
+                console.log(`[*] waiting for assembly... (${e.message})`);
+            }
+        }, 3000);
+    });
+}
+
 // ---------- hooks ----------
 
 async function main() {
     console.log('[*] justice_hook v4 starting...');
     await waitForIl2cpp();
-    console.log('[*] IL2CPP domain ready, installing hooks...\n');
+    console.log('[*] IL2CPP domain ready.');
+    await waitForAssembly();
+    console.log('[*] Installing hooks...\n');
 
     let hookCount = 0;
 
