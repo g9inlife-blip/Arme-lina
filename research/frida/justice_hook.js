@@ -494,6 +494,7 @@ async function main() {
                     console.log('\n---------- Sign called ----------');
                     const contentVal = readIl2cppString(args[0]);
                     this.inputs = { content: contentVal };
+                    this.dictPtr = args[1];  // store for onLeave re-read
                     console.log(`  content: ${trunc(contentVal)}`);
                     const dictVal = readDictionary(args[1]);
                     this.inputs.dict = dictVal;
@@ -502,11 +503,17 @@ async function main() {
                 },
                 onLeave(retval) {
                     const elapsed = Date.now() - this.startTime;
-                    const desc = describeRetval(retval);
-                    console.log(`  => SIGN OUTPUT: ${desc}`);
+                    // Sign returns void - check if dict was modified in-place
+                    let afterDict = '';
+                    try {
+                        // args[1] not available in onLeave, use stored pointer
+                        afterDict = JSON.stringify(readDictionary(this.dictPtr));
+                    } catch (e) { afterDict = `(re-read failed: ${e.message})`; }
+                    console.log(`  => SIGN OUTPUT: void (dict modified in-place?)`);
+                    console.log(`  => dict after: ${afterDict}`);
                     console.log(`  (${elapsed}ms)`);
                     console.log('----------------------------------\n');
-                    console.log(`[SIGN_DATA] input_content=${JSON.stringify(trunc(this.inputs.content, 2000))} input_dict=${JSON.stringify(this.inputs.dict)} output=${JSON.stringify(desc)}`);
+                    console.log(`[SIGN_DATA] input_content=${JSON.stringify(trunc(this.inputs.content, 2000))} input_dict=${JSON.stringify(this.inputs.dict)} dict_after=${afterDict}`);
                 }
             });
             hookCount++;
