@@ -37,9 +37,21 @@ const LIB_NAME = 'libil2cpp.so';
 function readIl2cppString(ptr) {
     if (ptr.isNull()) return '(null)';
     try {
+        // Validate pointer is readable
+        const klass = ptr.readPointer();
+        if (klass.isNull()) return '(invalid klass)';
         // Il2CppString (64-bit): [klass(8)][monitor(8)][length(4)][chars...]
         const length = ptr.add(16).readU32();
-        if (length > 10000) return `(string too long: ${length} chars)`;
+        if (length > 10000) {
+            // Dump first bytes for diagnosis
+            let hex = '';
+            try {
+                for (let i = 0; i < 32; i++) {
+                    hex += ptr.add(i).readU8().toString(16).padStart(2, '0') + ' ';
+                }
+            } catch (e) { hex = 'unreadable'; }
+            return `(invalid string, length=${length}, ptr=${ptr}, hex=[${hex}])`;
+        }
         return ptr.add(20).readUtf16String(length);
     } catch (e) {
         return `<unreadable:${e.message}>`;
@@ -187,6 +199,8 @@ function initApi() {
         class_get_methods: new NativeFunction(exp('il2cpp_class_get_methods'), 'pointer', ['pointer', 'pointer']),
         method_get_name: new NativeFunction(exp('il2cpp_method_get_name'), 'pointer', ['pointer']),
         method_get_param_count: new NativeFunction(exp('il2cpp_method_get_param_count'), 'uint32', ['pointer']),
+        method_get_param: new NativeFunction(exp('il2cpp_method_get_param'), 'pointer', ['pointer', 'uint32']),
+        type_get_name: new NativeFunction(exp('il2cpp_type_get_name'), 'pointer', ['pointer']),
     };
 }
 
@@ -218,19 +232,44 @@ function findMethodImpl(className, methodName, paramCount) {
 
     const iter = Memory.alloc(Process.pointerSize);
     iter.writePointer(ptr(0));
+    const candidates = [];
     while (true) {
         const method = api.class_get_methods(klass, iter);
         if (method.isNull()) break;
         const mName = api.method_get_name(method).readCString();
+        if (mName !== methodName) continue;
         const pCount = api.method_get_param_count(method);
-        if (mName === methodName && pCount === paramCount) {
-            const fnPtr = method.readPointer(); // methodPointer @ offset 0
-            console.log(`[+] Found ${className}.${methodName} @ ${fnPtr}`);
-            return fnPtr;
+        // Get parameter type names
+        const typeNames = [];
+        for (let pi = 0; pi < pCount; pi++) {
+            try {
+                const t = api.method_get_param(method, pi);
+                const tn = api.type_get_name(t).readCString();
+                typeNames.push(tn);
+            } catch (e) {
+                typeNames.push('?');
+            }
+        }
+        console.log(`[?] ${className}.${methodName} overload: (${typeNames.join(', ')}) @ ${method.readPointer()}`);
+        if (pCount === paramCount) {
+            candidates.push({ method, typeNames, fnPtr: method.readPointer() });
         }
     }
-    console.log(`[!] Method not found: ${className}.${methodName} (${paramCount} params)`);
-    return ptr(0);
+    if (candidates.length === 0) {
+        console.log(`[!] Method not found: ${className}.${methodName} (${paramCount} params)`);
+        return ptr(0);
+    }
+    // Prefer the overload where all params are System.String
+    for (const c of candidates) {
+        if (c.typeNames.every(t => t === 'System.String')) {
+            console.log(`[+] Found ${className}.${methodName}(${c.typeNames.join(', ')}) @ ${c.fnPtr}`);
+            return c.fnPtr;
+        }
+    }
+    // Fallback: first candidate
+    const c = candidates[0];
+    console.log(`[+] Found ${className}.${methodName}(${c.typeNames.join(', ')}) @ ${c.fnPtr} (first match)`);
+    return c.fnPtr;
 }
 
 function waitForIl2cpp() {
