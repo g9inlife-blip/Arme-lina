@@ -257,22 +257,33 @@ function waitForIl2cpp() {
 function waitForAssembly() {
     return new Promise((resolve) => {
         console.log('[*] Waiting for Assembly-CSharp (enter the game world on the phone)...');
+        let listed = false;
         const timer = setInterval(() => {
             try {
                 const domain = api.domain_get();
                 const countPtr = Memory.alloc(Process.pointerSize);
                 const assemblies = api.domain_get_assemblies(domain, countPtr);
                 const count = countPtr.readU32();
+                let found = false;
+                const names = [];
                 for (let i = 0; i < count; i++) {
                     const asm = assemblies.add(i * Process.pointerSize).readPointer();
                     const img = api.assembly_get_image(asm);
                     const name = api.image_get_name(img).readCString();
+                    names.push(name);
                     if (name === 'Assembly-CSharp') {
-                        clearInterval(timer);
-                        console.log(`[*] Assembly-CSharp found (${count} assemblies loaded).`);
-                        resolve();
-                        return;
+                        found = true;
                     }
+                }
+                if (found) {
+                    clearInterval(timer);
+                    console.log(`[*] Assembly-CSharp found (${count} assemblies loaded).`);
+                    resolve();
+                    return;
+                }
+                if (!listed && count > 5) {
+                    listed = true;
+                    console.log(`[*] Loaded assemblies (${count}): ${names.join(', ')}`);
                 }
             } catch (e) {
                 console.log(`[*] waiting for assembly... (${e.message})`);
